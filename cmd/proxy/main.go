@@ -17,6 +17,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"os"
 
 	"k8s.io/klog/v2"
@@ -26,7 +27,7 @@ import (
 
 func main() {
 	ctx := context.Background()
-
+	fmt.Println("test!")
 	port := flag.Int("port", 8080, "port to listen on")
 	allowedHosts := flag.String("allowed-hosts", "", "comma separated list of allowed hosts")
 	forceHost := flag.String("force-host", "", "force the server Host to this value")
