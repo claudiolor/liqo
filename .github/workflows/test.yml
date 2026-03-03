@@ -12,6 +12,7 @@ jobs:
       commit-ref: ${{ steps.configure.outputs.commit-ref }}
       repo-suffix: ${{ steps.configure.outputs.repo-suffix }}
       repo-name: ${{ steps.configure.outputs.repo-name }}
+      docs-only: ${{ steps.check-docs-only.outputs.docs-only }}
     steps:
     - name: Configure
       id: configure
@@ -31,15 +32,47 @@ jobs:
            echo "repo-name=${{ github.event.client_payload.github.payload.repository.full_name }}" >> $GITHUB_OUTPUT
         fi
 
+    - name: Check if docs-only changes
+      id: check-docs-only
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ secrets.CI_TOKEN }}
+        script: |
+          if (context.eventName !== 'repository_dispatch') {
+            core.setOutput('docs-only', 'false');
+            return;
+          }
 
-    # Since we are using a repository-dispatch event, we have to explicitly set a run check. We initialize it to a "pending" state.
+          const prNumber = context.payload.client_payload.github.payload.issue.number;
+          const { owner, repo } = context.repo;
+
+          const files = await github.paginate(github.rest.pulls.listFiles, {
+            owner,
+            repo,
+            pull_number: prNumber,
+          });
+
+          const docsPatterns = [
+            /^docs\//,
+            /\.md$/,
+            /^\.readthedocs\.yaml$/,
+          ];
+
+          const docsOnly = files.every(f =>
+            docsPatterns.some(p => p.test(f.filename))
+          );
+
+          core.setOutput('docs-only', docsOnly.toString());
+
+    # Since we are using a repository-dispatch event, we have to explicitly set a run check.
+    # Set to "success" immediately for docs-only PRs, otherwise initialize to "pending".
     - uses: octokit/request-action@v2.x
-      name: "Initialize run check to 'pending'"
+      name: "Initialize run check (For PR-only)"
       with:
         route: POST /repos/${{ github.repository }}/statuses/${{ steps.configure.outputs.commit-ref }}
-        state: "pending"
-        description: "Unit Test status"
-        context:  "Unit Test"
+        state: ${{ steps.check-docs-only.outputs.docs-only == 'true' && 'success' || 'pending' }}
+        description: ${{ steps.check-docs-only.outputs.docs-only == 'true' && 'Skipped (docs-only changes)' || 'Unit Test status' }}
+        context: "Unit Test"
         target_url: "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
       env:
         GITHUB_TOKEN: ${{ secrets.CI_TOKEN }}
@@ -49,6 +82,7 @@ jobs:
     name: Launch Test
     runs-on: ubuntu-latest
     needs: configure
+    if: needs.configure.outputs.docs-only != 'true'
     steps:
 
     - name: Check out code into the Go module directory

@@ -7,8 +7,32 @@ on:
       - synchronize
 
 jobs:
+  detect-changes:
+    name: Detect changed files
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    outputs:
+      helm-docs: ${{ steps.filter.outputs.helm-docs }}
+      ci: ${{ steps.filter.outputs.ci }}
+    steps:
+      - name: Detect changed files
+        uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            helm-docs:
+              - 'deployments/liqo/values.yaml'
+              - 'deployments/liqo/README.gotmpl'
+              - 'deployments/liqo/Chart.yaml'
+              - 'deployments/liqo/.helmdocsignore'
+            ci:
+              - '.github/**'
+
   generated-helm-documentation:
     name: Check Generated Helm Documentation
+    needs: [detect-changes]
+    if: needs.detect-changes.outputs.helm-docs == 'true' || needs.detect-changes.outputs.ci == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

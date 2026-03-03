@@ -20,6 +20,7 @@ jobs:
       repo-name: ${{ steps.configure.outputs.repo-name }}
       architectures: ${{ steps.configure.outputs.architectures }}
       pr-number: ${{ steps.configure.outputs.pr-number }}
+      docs-only: ${{ steps.check-docs-only.outputs.docs-only }}
     steps:
       - name: Get the version
         id: get_version
@@ -59,13 +60,46 @@ jobs:
              echo "repo-name=${{ github.event.client_payload.github.payload.repository.full_name }}" >> $GITHUB_OUTPUT
           fi
 
-        # Since we are using a repository-dispatch event, we have to explicitly set a run check. We initialize it to a "pending" state.
+      - name: Check if docs-only changes
+        id: check-docs-only
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.CI_TOKEN }}
+          script: |
+            if (context.eventName !== 'repository_dispatch') {
+              core.setOutput('docs-only', 'false');
+              return;
+            }
+
+            const prNumber = context.payload.client_payload.github.payload.issue.number;
+            const { owner, repo } = context.repo;
+
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner,
+              repo,
+              pull_number: prNumber,
+            });
+
+            const docsPatterns = [
+              /^docs\//,
+              /\.md$/,
+              /^\.readthedocs\.yaml$/,
+            ];
+
+            const docsOnly = files.every(f =>
+              docsPatterns.some(p => p.test(f.filename))
+            );
+
+            core.setOutput('docs-only', docsOnly.toString());
+
+        # Since we are using a repository-dispatch event, we have to explicitly set a run check.
+        # Set to "success" immediately for docs-only PRs, otherwise initialize to "pending".
       - uses: octokit/request-action@v2.x
-        name: "Initialize run check to 'pending (For PR-only)"
+        name: "Initialize run check (For PR-only)"
         with:
           route: POST /repos/${{ github.repository }}/statuses/${{ steps.configure.outputs.commit-ref }}
-          state: "pending"
-          description: "Component build status"
+          state: ${{ steps.check-docs-only.outputs.docs-only == 'true' && 'success' || 'pending' }}
+          description: ${{ steps.check-docs-only.outputs.docs-only == 'true' && 'Skipped (docs-only changes)' || 'Component build status' }}
           context: "Components building"
           target_url: "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
         env:
@@ -75,6 +109,7 @@ jobs:
   build-standard:
     runs-on: ubuntu-latest
     needs: configure
+    if: needs.configure.outputs.docs-only != 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -157,6 +192,7 @@ jobs:
   build-go:
     runs-on: ubuntu-latest
     needs: configure
+    if: needs.configure.outputs.docs-only != 'true'
     env:
       DOCKER_REGISTRY: ghcr.io
       DOCKER_ORGANIZATION: ${{ github.repository_owner }}
@@ -212,6 +248,7 @@ jobs:
   post-build:
     runs-on: ubuntu-latest
     needs: [build-standard, build-go, configure, liqoctl]
+    if: needs.configure.outputs.docs-only != 'true'
     steps:
       - name: Forge build result
         id: forge_build_result
@@ -239,7 +276,7 @@ jobs:
   e2e-test-trigger:
     runs-on: ubuntu-latest
     needs: [build-standard, build-go, configure, liqoctl]
-    if: github.event.client_payload.slash_command.command == 'test'
+    if: github.event.client_payload.slash_command.command == 'test' && needs.configure.outputs.docs-only != 'true'
     steps:
       - name: Notify Event to E2E Tests
         uses: peter-evans/repository-dispatch@v3
@@ -260,6 +297,7 @@ jobs:
   liqoctl:
     runs-on: ubuntu-latest
     needs: [configure]
+    if: needs.configure.outputs.docs-only != 'true'
     strategy:
       matrix:
         goos: [linux, windows, darwin]
